@@ -80,7 +80,7 @@ func main() {
 						}
 
 						log.Println("Map file moved to TF2 maps folder!")
-						log.Printf("You can start the map by typing 'map %s' in the console.\n", mapNameWithExt[len(mapNameWithExt)-4:])
+						log.Printf("You can start the map by typing 'map %s' in the console.\n", mapNameWithExt[:len(mapNameWithExt)-4])
 					}
 				}
 			case err, ok := <-watcher.Errors:
