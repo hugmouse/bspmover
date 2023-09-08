@@ -86,10 +86,11 @@ func main() {
 	}(watcher)
 	log.Println("[Info] Created new watcher.")
 
+	// Create a map to track files being processed
+	processingFiles := make(map[string]bool)
+
 	// Start listening for events
 	go func() {
-		// Print once when goroutine starts
-		log.Println("[Info] Listening for new map files...")
 		for {
 			select {
 			case event, ok := <-watcher.Events:
@@ -99,8 +100,45 @@ func main() {
 				if event.Has(fsnotify.Create) {
 					if event.Name[len(event.Name)-4:] == ".bsp" {
 						mapNameWithExt := strings.Split(event.Name, "\\")[len(strings.Split(event.Name, "\\"))-1]
-						log.Println("Map file created! Waiting a few seconds before moving it to the TF2 maps folder...")
 
+						// Check if the file is already being processed
+						if processingFiles[event.Name] {
+							log.Printf("File %s is already being processed, skipping.", event.Name)
+							// Remove the file from the map, sometimes it happens with Firefox that it creates a file with the same name
+							delete(processingFiles, event.Name)
+							continue
+						}
+
+						// Mark the file as being processed
+						processingFiles[event.Name] = true
+
+						log.Println("Map file created! Waiting for it to be fully downloaded before moving it to the TF2 maps folder...")
+
+						// Wait for the file to stabilize (no changes in size) for a certain duration
+						stableDuration := 1 * time.Second
+						ticker := time.NewTicker(stableDuration)
+						var lastSize int64
+
+						for {
+							select {
+							case <-ticker.C:
+								fileInfo, err := os.Stat(event.Name)
+								if err != nil {
+									log.Println("Error while checking file size:", err)
+									return
+								}
+
+								if fileInfo.Size() == lastSize {
+									// File size hasn't changed, it's likely fully downloaded
+									ticker.Stop()
+									goto ContinueMoving
+								}
+
+								lastSize = fileInfo.Size()
+							}
+						}
+
+					ContinueMoving:
 						// Create a new _bsp reader
 						_bsp, err := bsp.ReadFromFile(event.Name)
 						if err != nil {
@@ -111,8 +149,6 @@ func main() {
 							log.Println("[Warn] This map is not compatible with Team Fortress 2. Ignoring. Version: ", _bsp.Header().Version)
 							continue
 						}
-
-						time.Sleep(2 * time.Second)
 
 						err = os.Rename(event.Name, tf2path+"\\"+mapNameWithExt)
 						if err != nil {
