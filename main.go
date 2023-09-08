@@ -5,35 +5,72 @@ import (
 	"github.com/galaco/bsp"
 	"log"
 	"os"
+	"os/user"
+	"path"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 )
 
-var (
-	// Downloads folder
-	downloads = os.Getenv("BSPMW_DOWNLOADS")
-	tf2path   = os.Getenv("BSPMW_TF")
-)
+func getDownloadsFolder() (string, error) {
+	currentUser, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+
+	downloadsPath := filepath.Join(currentUser.HomeDir, "Downloads")
+
+	return downloadsPath, nil
+}
+
+func getTF2Path() (string, error) {
+	var subkey = `SOFTWARE\Valve\Steam`
+
+	k, err := syscall.UTF16PtrFromString(subkey)
+	if err != nil {
+		return "", err
+	}
+
+	var handle syscall.Handle
+	if err := syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, k, 0, syscall.KEY_READ, &handle); err != nil {
+		return "", err
+	}
+	defer syscall.RegCloseKey(handle)
+
+	var buf [1024]uint16
+	n := uint32(len(buf))
+	if err := syscall.RegQueryValueEx(handle, syscall.StringToUTF16Ptr("SteamPath"), nil, nil, (*byte)(unsafe.Pointer(&buf[0])), &n); err != nil {
+		return "", err
+	}
+
+	return syscall.UTF16ToString(buf[:]), nil
+}
 
 func main() {
-	if downloads == "" {
-		log.Fatal("[Error] BSPMW_DOWNLOADS is not set. You must set this environment variable to the path of your downloads folder.")
+	downloads, err := getDownloadsFolder()
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Validate path
+	if _, err := os.Stat(downloads); os.IsNotExist(err) {
+		log.Println("[Error] Cannot find Downloads folder!")
 	}
 	log.Println("[Info] Downloads folder:", downloads)
 
-	// Validate path
-	if _, err := os.Stat(downloads); os.IsNotExist(err) {
-		log.Fatal("[Error] BSPMW_DOWNLOADS is not set to a valid folder. Please set this environment variable to the path of your downloads folder.")
+	// Try to auto-detect TF2 folder on Windows
+	tf2path, err := getTF2Path()
+	if err != nil {
+		log.Fatal("[Error] Failed to auto-detect Team Fortress 2 installation path:", err)
 	}
 
-	if tf2path == "" {
-		log.Fatal("[Error] BSPMW_TF is not set. You must set this environment variable to the path of your Team Fortress 2 installation.")
-	}
+	tf2path = path.Join(tf2path, "steamapps/common/Team Fortress 2/tf/maps")
 	log.Println("[Info] TF2 folder:", tf2path)
 
 	// Validate path
 	if _, err := os.Stat(tf2path); os.IsNotExist(err) {
-		log.Fatal("[Error] BSPMW_TF is not set to a valid folder. Please set this environment variable to the path of your downloads folder.")
+		log.Fatal("[Error] Auto-detected TF2 path is not valid. Please set BSPMW_TF environment variable to the correct TF2 folder.")
 	}
 
 	// Create new watcher
@@ -47,9 +84,12 @@ func main() {
 			log.Fatal(err)
 		}
 	}(watcher)
+	log.Println("[Info] Created new watcher.")
 
 	// Start listening for events
 	go func() {
+		// Print once when goroutine starts
+		log.Println("[Info] Listening for new map files...")
 		for {
 			select {
 			case event, ok := <-watcher.Events:
